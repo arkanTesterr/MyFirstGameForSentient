@@ -1,231 +1,235 @@
-// ====== Canvas Setup ======
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
+const API_KEY = 'AIzaSyCKkqyUbW9kT3O9AmWmSI2CWdxG4bll89g';
 
-canvas.width = 900;
-canvas.height = 600;
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 
-// ====== Game Variables ======
-let keys = {};
-let bullets = [];
-let enemies = [];
-let logos = [];
-let score = 0;
-let hp = 100;
-let bossTimer = 30;
-let gameOver = false;
-let enemySpawnRate = 1000; // ms
-let lastEnemySpawn = 0;
+// Adjustable game settings
+const GAME_HEIGHT = 640; // Change this value to set custom game height
 
-// ====== Assets ======
+// Load images
 const playerImg = new Image();
-playerImg.src = "player.png";
+playerImg.src = 'player.png';
 
-const enemyImg = new Image();
-enemyImg.src = "obstacle.png";
+const obstacleImg = new Image();
+obstacleImg.src = 'obstacle.png';
 
-const bulletImg = new Image();
-bulletImg.src = "bullets.png";
+let imagesLoaded = 0;
+function onImageLoad() {
+  imagesLoaded++;
+  if (imagesLoaded === 2) {
+    init(); // Start game after images are loaded
+  }
+}
+playerImg.onload = onImageLoad;
+obstacleImg.onload = onImageLoad;
 
-const logoImg = new Image();
-logoImg.src = "logo.png";
+let W, H;
+let keys = { left: false, right: false };
+let player, obstacles = [], score = 0, high = 0, running = false, muted = false;
+let spawnTimer = 0, spawnInterval = 60, gravitySpeed = 2;
 
-// ====== Player Object ======
-let player = {
-  x: canvas.width / 2 - 30,
-  y: canvas.height - 100,
-  w: 60,
-  h: 60,
-  speed: 5,
-  shooting: false,
-  shootCooldown: 200, // ms
-  lastShot: 0,
-};
+// Game setup
+function init() {
+  resize();
+  high = localStorage.getItem('dodge_high') || 0;
+  player = {
+    x: W / 2 - 35,
+    y: H - 120,
+    w: 70,
+    h: 70,
+    speed: 5
+  };
+  fetchTheme();
+}
 
-// ====== Events ======
-document.addEventListener("keydown", (e) => { keys[e.key] = true; });
-document.addEventListener("keyup", (e) => { keys[e.key] = false; });
-document.getElementById("restartBtn").addEventListener("click", resetGame);
+// Fetch theme from Gemini
+async function fetchTheme() {
+  document.getElementById('theme-info').style.display = 'block';
+  document.getElementById('theme-title').textContent = 'Loading Theme...';
+  
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{ text: "Generate a creative theme for a simple obstacle-dodging game. Provide a short, exciting title and a one-sentence backstory. Format it as Title: [Title]\\nBackstory: [Backstory]" }]
+        }]
+      })
+    });
+    const data = await response.json();
+    const text = data.candidates[0].content.parts[0].text;
+    const titleMatch = text.match(/Title: (.*)/);
+    const backstoryMatch = text.match(/Backstory: (.*)/);
+    
+    if (titleMatch && backstoryMatch) {
+      document.getElementById('theme-title').textContent = titleMatch[1];
+      document.getElementById('theme-backstory').textContent = backstoryMatch[1];
+    }
+    
+    setTimeout(() => {
+      document.getElementById('theme-info').style.display = 'none';
+      restart();
+    }, 4000);
 
-// ====== Utility Functions ======
-function resetGame() {
+  } catch (error) {
+    console.error('Error fetching theme:', error);
+    document.getElementById('theme-title').textContent = 'Dodge Them!';
+    document.getElementById('theme-backstory').textContent = 'Avoid the falling blocks.';
+    setTimeout(() => {
+      document.getElementById('theme-info').style.display = 'none';
+      restart();
+    }, 2000);
+  }
+}
+
+// Resize canvas
+function resize() {
+  W = canvas.clientWidth;
+  H = GAME_HEIGHT; // Dynamic value from constant
+  fixPixelRatio();
+}
+
+// Keyboard events
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') keys.left = true;
+  if (e.key === 'ArrowRight') keys.right = true;
+});
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'ArrowLeft') keys.left = false;
+  if (e.key === 'ArrowRight') keys.right = false;
+});
+
+// Touch events
+canvas.addEventListener('touchstart', (e) => {
+  const touchX = e.touches[0].clientX;
+  if (touchX < W / 2) keys.left = true;
+  else keys.right = true;
+});
+canvas.addEventListener('touchend', () => {
+  keys.left = false;
+  keys.right = false;
+});
+
+// Spawn obstacles
+function spawn() {
+  const size = Math.random() * 20 + 40; // random size between 40 and 60
+  obstacles.push({
+    x: Math.random() * (W - size),
+    y: -size,
+    w: size,
+    h: size,
+    speed: gravitySpeed
+  });
+}
+
+// Update game state
+function update() {
+  if (!running) return;
+  if (keys.left) player.x -= player.speed;
+  if (keys.right) player.x += player.speed;
+  player.x = Math.max(6, Math.min(W - player.w - 6, player.x));
+
+  spawnTimer++;
+  if (spawnTimer >= spawnInterval) {
+    spawnTimer = 0;
+    spawn();
+    if (spawnInterval > 18) spawnInterval -= 0.7;
+    gravitySpeed += 0.03;
+  }
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.y += o.speed * (W / 900);
+    if (o.y + o.h > player.y && o.y < player.y + player.h &&
+        o.x < player.x + player.w && o.x + o.w > player.x) {
+      gameOver();
+    }
+    if (o.y > H + 50) {
+      obstacles.splice(i, 1);
+      score += 1;
+    }
+  }
+}
+
+// Draw everything
+function draw() {
+  ctx.fillStyle = '#04162a';
+  ctx.fillRect(0, 0, W, H);
+
+  for (let i = 0; i < 60; i++) {
+    const sx = (i * 37) % W, sy = (i * 23) % H;
+    ctx.fillStyle = 'rgba(160,200,255,0.02)';
+    ctx.fillRect((sx + (score % 100)) / 1.1 % W, sy, 1, 1);
+  }
+
+  // Draw player
+  ctx.drawImage(playerImg, player.x, player.y, player.w, player.h);
+
+  // Draw obstacles
+  for (const o of obstacles) {
+    ctx.drawImage(obstacleImg, o.x, o.y, o.w, o.h);
+  }
+
+  document.getElementById('score').textContent = score;
+  document.getElementById('high').textContent = high;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function gameOver() {
+  running = false;
+  if (score > high) {
+    high = score;
+    localStorage.setItem('dodge_high', high);
+  }
+  setTimeout(() => {
+    const again = confirm(`Game Over\\nScore: ${score}\\nHigh: ${high}\\n\\nPlay again?`);
+    if (again) restart();
+  }, 60);
+}
+
+function restart() {
+  obstacles = [];
+  spawnTimer = 0;
+  spawnInterval = 60;
+  gravitySpeed = 2;
   score = 0;
-  hp = 100;
-  bossTimer = 30;
-  bullets = [];
-  enemies = [];
-  gameOver = false;
-  player.x = canvas.width / 2 - 30;
-  player.y = canvas.height - 100;
-  generateLogos();
+  running = true;
+  player.x = W / 2 - player.w / 2;
   loop();
 }
 
-function spawnEnemy() {
-    enemies.push({
-        x: Math.random() * (canvas.width - 50),
-        y: -50,
-        w: 50,
-        h: 50,
-        speed: 2 + Math.random() * 2
-    });
-}
-
-function checkCollision(rect1, rect2) {
-    return (
-        rect1.x < rect2.x + rect2.w &&
-        rect1.x + rect1.w > rect2.x &&
-        rect1.y < rect2.y + rect2.h &&
-        rect1.y + rect1.h > rect2.y
-    );
-}
-
-// ====== Background Logos ======
-function generateLogos() {
-  logos = [];
-  for (let i = 0; i < 10; i++) {
-    logos.push({
-      x: Math.random() * (canvas.width - 80),
-      y: Math.random() * (canvas.height - 80),
-      size: 60 + Math.random() * 40
-    });
-  }
-}
-
-function drawBackground() {
-  logos.forEach((l) => {
-    ctx.globalAlpha = 0.07; // light watermark effect
-    ctx.drawImage(logoImg, l.x, l.y, l.size, l.size);
-    ctx.globalAlpha = 1.0;
-  });
-}
-
-// ====== Core Game Loop ======
-function update(timestamp) {
-    if (gameOver) return;
-
-    // Player movement
-    if (keys["ArrowLeft"] || keys["a"]) {
-        if (player.x > 0) player.x -= player.speed;
-    }
-    if (keys["ArrowRight"] || keys["d"]) {
-        if (player.x < canvas.width - player.w) player.x += player.speed;
-    }
-    if (keys["ArrowUp"] || keys["w"]) {
-        if (player.y > 0) player.y -= player.speed;
-    }
-    if (keys["ArrowDown"] || keys["s"]) {
-        if (player.y < canvas.height - player.h) player.y += player.speed;
-    }
-
-    // Shooting
-    if (keys[" "] && timestamp - player.lastShot > player.shootCooldown) {
-        bullets.push({
-            x: player.x + player.w / 2 - 5,
-            y: player.y,
-            w: 10,
-            h: 20,
-            speed: 10
-        });
-        player.lastShot = timestamp;
-    }
-
-    // Update bullets
-    for (let i = bullets.length - 1; i >= 0; i--) {
-        let b = bullets[i];
-        b.y -= b.speed;
-        if (b.y < 0) {
-            bullets.splice(i, 1);
-        }
-    }
-
-    // Enemy spawning
-    if (timestamp - lastEnemySpawn > enemySpawnRate) {
-        spawnEnemy();
-        lastEnemySpawn = timestamp;
-    }
-
-    // Update enemies
-    for (let i = enemies.length - 1; i >= 0; i--) {
-        let e = enemies[i];
-        e.y += e.speed;
-        if (e.y > canvas.height) {
-            enemies.splice(i, 1);
-        }
-    }
-    
-    // Collision detection
-    // Bullets vs Enemies
-    for (let i = bullets.length - 1; i >= 0; i--) {
-        for (let j = enemies.length - 1; j >= 0; j--) {
-            if (checkCollision(bullets[i], enemies[j])) {
-                bullets.splice(i, 1);
-                enemies.splice(j, 1);
-                score += 10;
-                break; 
-            }
-        }
-    }
-
-    // Player vs Enemies
-    for (let i = enemies.length - 1; i >= 0; i--) {
-        if (checkCollision(player, enemies[i])) {
-            enemies.splice(i, 1);
-            hp -= 20;
-            if (hp <= 0) {
-                hp = 0;
-                gameOver = true;
-            }
-        }
-    }
-    
-    // Update boss timer
-    bossTimer -= 1/60; // Assuming 60 FPS
-    if(bossTimer < 0) bossTimer = 0;
-}
-
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Background
-  drawBackground();
-
-  // Player
-  ctx.drawImage(playerImg, player.x, player.y, player.w, player.h);
-
-  // Bullets
-  bullets.forEach(b => {
-      ctx.drawImage(bulletImg, b.x, b.y, b.w, b.h);
-  });
-
-  // Enemies
-  enemies.forEach(e => {
-      ctx.drawImage(enemyImg, e.x, e.y, e.w, e.h);
-  });
-
-  // HUD Update
-  document.getElementById("score").textContent = score;
-  document.getElementById("hp").textContent = hp;
-  document.getElementById("boss").textContent = Math.floor(bossTimer);
-  
-  if (gameOver) {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "white";
-      ctx.font = "50px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
-  }
-}
-
-function loop(timestamp) {
-  update(timestamp);
+let rafId;
+function loop() {
+  update();
   draw();
-  if (!gameOver) {
-    requestAnimationFrame(loop);
-  }
+  if (running) rafId = requestAnimationFrame(loop);
+  else cancelAnimationFrame(rafId);
 }
 
-// ====== Init ======
-generateLogos();
-loop(0);
+document.getElementById('restartBtn').addEventListener('click', () => { restart(); });
+document.getElementById('muteBtn').addEventListener('click', () => {
+  muted = !muted;
+  document.getElementById('muteBtn').textContent = muted ? 'Unmute' : 'Mute';
+});
+
+function fixPixelRatio() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * ratio);
+  canvas.height = Math.round(H * ratio);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+window.addEventListener('resize', () => { resize(); fixPixelRatio(); });
